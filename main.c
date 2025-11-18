@@ -1,19 +1,30 @@
 /* Includes */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <termios.h>
-#include <stdlib.h>
 #include <ctype.h>
-#include <sys/ioctl.h>
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <unistd.h>
 
 /* Defines */
+#define VERSION "0.0.1"
 #define CTRL_KEY(k) (0x1f & k)
+
+enum editorKeys {
+    UP_KEY = 1000,
+    DOWN_KEY = 1001,
+    LEFT_KEY = 1002,
+    RIGHT_KEY = 1003,
+};
 
 /* Data */
 
 struct editorConfig {
+    int cx;
+    int cy;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -53,7 +64,7 @@ void enterRawMode() {
     raw.c_iflag &= ~(BRKINT | INPCK | IXON | ICRNL | ISTRIP);
     raw.c_oflag &= ~(OPOST);
     raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ICANON | ISIG | IEXTEN);
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 1;
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
@@ -61,13 +72,33 @@ void enterRawMode() {
     }
 }
 
-char editorReadKey(void) {
+int editorReadKey(void) {
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN) {
             die("read");
         }
+    }
+
+    if (c == '\x1b') {
+        char seq[3];
+
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if (seq[0] == '[') {
+            switch (seq[1]) {
+                case 'A': return UP_KEY;
+                case 'B': return DOWN_KEY;
+                case 'C': return RIGHT_KEY;
+                case 'D': return LEFT_KEY;
+            }
+        }
+
+        return '\x1b';
+    } else {
+        return c;
     }
     return c;
 }
@@ -102,29 +133,93 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
+/* Append Buffer */
+
+struct append_buffer {
+    char* p;
+    int len;
+};
+
+#define ABUFF_INIT {NULL, 0}
+
+void abAppend(struct append_buffer* ab, char* s, int len) {
+    char* new = realloc(ab->p, ab->len + len);
+    if (new == NULL) {
+        return;
+    }
+    memcpy(new + ab->len, s, len);
+    ab->p = new;
+    ab->len += len;
+}
+
+void abFree(struct append_buffer* ab) {
+    free(ab->p);
+}
+
 /* Output */
 
-void editorDrawRows(void) {
+void editorDrawRows(struct append_buffer* ab) {
     for (int y = 0; y < E.screenrows; y++) {
-        write(STDOUT_FILENO, "~", 1);
+        if (y == E.screenrows / 3) {
+            char welcome[80];
+            int welcomeLen = snprintf(welcome, sizeof(welcome),
+                "Notepad --- Version: %s", VERSION);
+            if (welcomeLen > E.screencols) welcomeLen = E.screencols;
+            int padding = (E.screencols - welcomeLen) / 2;
+            if (padding) {
+                abAppend(ab, "~", 1);
+                padding--;
+            }
+            while (padding > 0) {
+                abAppend(ab, " ", 1);
+                padding--;
+            }
+            abAppend(ab, welcome, welcomeLen);
+        } else {
+            abAppend(ab, "~", 1);
+        }
+
+        abAppend(ab, "\x1b[K", 3);
         if (y < E.screenrows - 1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
 
-void editorRefreshScreen(void) {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
+void editorRefreshScreen() {
+    struct append_buffer ab = ABUFF_INIT;
 
-    editorDrawRows();
+    abAppend(&ab, "\x1b[?25l", 6);
+    abAppend(&ab, "\x1b[H", 3);
 
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    editorDrawRows(&ab);
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
+
+    abAppend(&ab, "\x1b[?25h", 6);
+
+    write(STDOUT_FILENO, ab.p, ab.len);
+    abFree(&ab);
 }
 
 /* Input */
+
+void editorMoveCursor(int c) {
+    if (c == UP_KEY && E.cy > 0) {
+        E.cy--;
+    } else if (c == LEFT_KEY && E.cx > 0) {
+        E.cx--;
+    } else if (c == DOWN_KEY && E.cy < E.screenrows - 1) {
+        E.cy++;
+    } else if (c == RIGHT_KEY && E.cx < E.screencols - 1) {
+        E.cx++;
+    }
+}
+
 void editorProcessKeypress(void) {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c) {
         case CTRL_KEY('q'):
@@ -132,12 +227,20 @@ void editorProcessKeypress(void) {
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
             break;
+        case UP_KEY:
+        case LEFT_KEY:
+        case DOWN_KEY:
+        case RIGHT_KEY:
+            editorMoveCursor(c);
+            break;
     }
 }
 
 /* Init */
 
 void initEditor(void) {
+    E.cx = 0;
+    E.cy = 0;
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) {
         die("getWindowSize");
     }
