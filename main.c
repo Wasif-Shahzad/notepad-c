@@ -15,9 +15,9 @@
 
 enum editorKeys {
     UP_KEY = 1000,
-    DOWN_KEY = 1001,
-    LEFT_KEY = 1002,
-    RIGHT_KEY = 1003,
+    DOWN_KEY,
+    LEFT_KEY,
+    RIGHT_KEY,
     PAGE_UP,
     PAGE_DOWN,
 };
