@@ -18,6 +18,8 @@ enum editorKeys {
     DOWN_KEY = 1001,
     LEFT_KEY = 1002,
     RIGHT_KEY = 1003,
+    PAGE_UP,
+    PAGE_DOWN,
 };
 
 /* Data */
@@ -88,11 +90,23 @@ int editorReadKey(void) {
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
         if (seq[0] == '[') {
-            switch (seq[1]) {
-                case 'A': return UP_KEY;
-                case 'B': return DOWN_KEY;
-                case 'C': return RIGHT_KEY;
-                case 'D': return LEFT_KEY;
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if (seq[2] == '~') {
+                    switch (seq[1]) {
+                        case '5': return PAGE_UP;
+                        case '6': return PAGE_DOWN;
+                    }
+                } else {
+                    return '\x1b';
+                }
+            } else {
+                switch (seq[1]) {
+                    case 'A': return UP_KEY;
+                    case 'B': return DOWN_KEY;
+                    case 'C': return RIGHT_KEY;
+                    case 'D': return LEFT_KEY;
+                }
             }
         }
 
@@ -226,13 +240,28 @@ void editorProcessKeypress(void) {
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
-            break;
         case UP_KEY:
         case LEFT_KEY:
         case DOWN_KEY:
         case RIGHT_KEY:
             editorMoveCursor(c);
             break;
+        case PAGE_UP: {
+            int current_position = E.cy;
+            while (current_position > 0) {
+                editorMoveCursor(UP_KEY);
+                current_position--;
+            }
+            break;
+        }
+        case PAGE_DOWN: {
+            int current_position = E.cy;
+            while (current_position < E.screenrows - 1) {
+                editorMoveCursor(DOWN_KEY);
+                current_position++;
+            }
+            break;
+        }
     }
 }
 
