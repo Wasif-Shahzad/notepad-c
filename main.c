@@ -16,6 +16,7 @@
 /* Defines */
 #define VERSION "0.0.1"
 #define CTRL_KEY(k) (0x1f & k)
+#define TAB_SIZE 4
 
 enum editorKeys {
     UP_KEY = 1000,
@@ -33,14 +34,20 @@ enum editorKeys {
 
 typedef struct {
     char* text;
+    char* render;
     int size;
+    int rsize;
+    int* cxTorx;
 } eRow;
 
 struct editorConfig {
     int cx;
     int cy;
+    int rx;
     int screenRows;
     int screenCols;
+    int rowOff;
+    int colOff;
     int numRows;
     eRow* row;
     struct termios orig_termios;
@@ -170,7 +177,42 @@ int getWindowSize(int *rows, int *cols) {
     }
 }
 
-/* Append Row */
+/* Row operations */
+
+int editorRowCxToRx(const eRow* row, const int cx) {
+    return row->cxTorx[cx];
+}
+
+void editorUpdateRow(eRow* row) {
+    free(row->render);
+    free(row->cxTorx);
+
+    int len = 0;
+    for (int idx = 0; idx < row->size; idx++) {
+        if (row->text[idx] == '\t') {
+            len += TAB_SIZE;
+        } else {
+            len++;
+        }
+    }
+
+    row->rsize = len;
+    row->render = malloc(len + 1);
+    row->cxTorx = calloc(len + 1, sizeof(int));
+    int idx = 0;
+    for (int i = 0; i < row->size; i++) {
+        row->cxTorx[i] = idx;
+        if (row->text[i] == '\t') {
+            for (int j = 0; j < TAB_SIZE; j++) {
+                row->render[idx++] = ' ';
+            }
+        } else {
+            row->render[idx++] = row->text[i];
+        }
+    }
+    row->render[len] = '\0';
+    row->cxTorx[row->size] = len;
+}
 
 void editorAppendRow(const char* s, const int len) {
     eRow* tmp = realloc(E.row, sizeof(eRow) * (E.numRows + 1));
@@ -185,6 +227,12 @@ void editorAppendRow(const char* s, const int len) {
     E.row[at].text = malloc(len + 1);
     memcpy(E.row[at].text, s, len);
     E.row[at].text[len] = '\0';
+
+    E.row[at].rsize = len;
+    E.row[at].render = NULL;
+    E.row[at].cxTorx = NULL;
+    editorUpdateRow(&E.row[at]);
+
     E.numRows++;
 }
 
@@ -233,9 +281,30 @@ void abFree(const struct append_buffer* ab) {
 
 /* Output */
 
+void editorScroll(void) {
+    E.rx = 0;
+    if (E.cy < E.numRows) {
+        E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
+    }
+    if (E.cy < E.rowOff) {
+        E.rowOff = E.cy;
+    }
+    if (E.cy >= E.rowOff + E.screenRows) {
+        E.rowOff = E.cy - E.screenRows + 1;
+    }
+
+    if (E.rx < E.colOff) {
+        E.colOff = E.rx;
+    }
+    if (E.rx >= E.colOff + E.screenCols) {
+        E.colOff = E.rx - E.screenCols + 1;
+    }
+}
+
 void editorDrawRows(struct append_buffer* ab) {
     for (int y = 0; y < E.screenRows; y++) {
-        if (y >= E.numRows) {
+        const int fileRows = y + E.rowOff;
+        if (fileRows >= E.numRows) {
             if (E.numRows == 0 && y == E.screenRows / 3) {
                 char welcome[80];
                 int welcomeLen = snprintf(welcome, sizeof(welcome),
@@ -255,9 +324,10 @@ void editorDrawRows(struct append_buffer* ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row[y].size;
+            int len = E.row[fileRows].rsize - E.colOff;
+            if (len < 0) len = 0;
             if (E.screenCols < len) len = E.screenCols;
-            abAppend(ab, E.row[y].text, len);
+            abAppend(ab, E.row[fileRows].render + E.colOff, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -268,6 +338,8 @@ void editorDrawRows(struct append_buffer* ab) {
 }
 
 void editorRefreshScreen(void) {
+    editorScroll();
+
     struct append_buffer ab = ABUFF_INIT;
 
     abAppend(&ab, "\x1b[?25l", 6);
@@ -276,7 +348,7 @@ void editorRefreshScreen(void) {
     editorDrawRows(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowOff) + 1, (E.rx - E.colOff) + 1);
     abAppend(&ab, buf, (int)strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6);
@@ -287,15 +359,30 @@ void editorRefreshScreen(void) {
 
 /* Input */
 
-void editorMoveCursor(int c) {
+void editorMoveCursor(const int c) {
     if (c == UP_KEY && E.cy > 0) {
         E.cy--;
-    } else if (c == LEFT_KEY && E.cx > 0) {
-        E.cx--;
-    } else if (c == DOWN_KEY && E.cy < E.screenRows - 1) {
+        const int lineLen = E.row[E.cy].size;
+        if (lineLen < E.cx) E.cx = lineLen;
+    } else if (c == LEFT_KEY) {
+        if (E.cx > 0) {
+            E.cx--;
+        } else if (E.cy > 0) {
+            E.cy--;
+            E.cx = E.row[E.cy].size;
+        }
+    } else if (c == DOWN_KEY && E.cy < E.numRows) {
         E.cy++;
-    } else if (c == RIGHT_KEY && E.cx < E.screenCols - 1) {
-        E.cx++;
+        const int lineLen = E.row[E.cy].size;
+        if (lineLen < E.cx) E.cx = lineLen;
+    } else if (c == RIGHT_KEY) {
+        const int lineLen = E.row[E.cy].size;
+        if (E.cx < lineLen) {
+            E.cx++;
+        } else if (E.cy < E.numRows) {
+            E.cy++;
+            E.cx = 0;
+        }
     }
 }
 
@@ -334,7 +421,8 @@ void editorProcessKeypress(void) {
             break;
         }
         case END_KEY: {
-            E.cx = E.screenCols - 1;
+            const int lineLen = E.row[E.cy].size;
+            E.cx = lineLen;
             break;
         }
         default:
@@ -348,8 +436,11 @@ void editorProcessKeypress(void) {
 void initEditor(void) {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.numRows = 0;
     E.row = NULL;
+    E.rowOff = 0;
+    E.colOff = 0;
     if (getWindowSize(&E.screenRows, &E.screenCols) == -1) {
         die("getWindowSize");
     }
