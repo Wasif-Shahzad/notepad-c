@@ -6,11 +6,13 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Defines */
@@ -49,6 +51,9 @@ struct editorConfig {
     int rowOff;
     int colOff;
     int numRows;
+    char* fileName;
+    char statusMsg[80];
+    time_t statusMsgTime;
     eRow* row;
     struct termios orig_termios;
 };
@@ -65,14 +70,14 @@ void die(const char* msg) {
     exit(1);
 }
 
-void disableRawMode() {
+void disableRawMode(void) {
     // we reset original terminal settings
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) {
         die("tcsetattr");
     }
 }
 
-void enterRawMode() {
+void enterRawMode(void) {
     // we get attributes for original terminal
     if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) {
         die("tcgetattr");
@@ -239,6 +244,9 @@ void editorAppendRow(const char* s, const int len) {
 /* File I/o */
 
 void editorOpen(const char* fileName) {
+    free(E.fileName);
+    E.fileName = strdup(fileName);
+
     FILE* fp = fopen(fileName, "r");
     if (fp == NULL) {
         die("fopen");
@@ -331,9 +339,38 @@ void editorDrawRows(struct append_buffer* ab) {
         }
 
         abAppend(ab, "\x1b[K", 3);
-        if (y < E.screenRows - 1) {
-            abAppend(ab, "\r\n", 2);
+        abAppend(ab, "\r\n", 2);
+    }
+}
+
+void editorDrawStatusBar(struct append_buffer* ab) {
+    abAppend(ab, "\x1b[7m", 4);
+
+    char status[80], rstatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines",
+        E.fileName ? E.fileName : "[No Name]", E.numRows);
+    if (len > E.screenCols) len = E.screenCols;
+    abAppend(ab, status, len);
+    int rLen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numRows);
+    while (len < E.screenCols) {
+        if (E.screenCols - len == rLen) {
+            abAppend(ab, rstatus, rLen);
+            break;
         }
+        abAppend(ab, " ", 1);
+        len++;
+    }
+
+    abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct append_buffer* ab) {
+    abAppend(ab, "\x1b[K", 3);
+    int msgLen = (int)strlen(E.statusMsg);
+    if (msgLen > E.screenCols) msgLen = E.screenCols;
+    if (msgLen && time(NULL) - E.statusMsgTime <= 5) {
+        abAppend(ab, E.statusMsg, msgLen);
     }
 }
 
@@ -346,6 +383,8 @@ void editorRefreshScreen(void) {
     abAppend(&ab, "\x1b[H", 3);
 
     editorDrawRows(&ab);
+    editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
 
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowOff) + 1, (E.rx - E.colOff) + 1);
@@ -355,6 +394,14 @@ void editorRefreshScreen(void) {
 
     write(STDOUT_FILENO, ab.p, ab.len);
     abFree(&ab);
+}
+
+void editorSetStatusMessage(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(E.statusMsg, sizeof(E.statusMsg), fmt, args);
+    va_end(args);
+    E.statusMsgTime = time(NULL);
 }
 
 /* Input */
@@ -371,7 +418,7 @@ void editorMoveCursor(const int c) {
             E.cy--;
             E.cx = E.row[E.cy].size;
         }
-    } else if (c == DOWN_KEY && E.cy < E.numRows) {
+    } else if (c == DOWN_KEY && E.cy + 1 < E.numRows) {
         E.cy++;
         const int lineLen = E.row[E.cy].size;
         if (lineLen < E.cx) E.cx = lineLen;
@@ -441,12 +488,16 @@ void initEditor(void) {
     E.cy = 0;
     E.rx = 0;
     E.numRows = 0;
-    E.row = NULL;
     E.rowOff = 0;
     E.colOff = 0;
+    E.row = NULL;
+    E.fileName = NULL;
+    E.statusMsg[0] = '\0';
+    E.statusMsgTime = 0;
     if (getWindowSize(&E.screenRows, &E.screenCols) == -1) {
         die("getWindowSize");
     }
+    E.screenRows -= 2;
 }
 
 int main(const int argc, char* argv[]) {
@@ -455,6 +506,8 @@ int main(const int argc, char* argv[]) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     }
+
+    editorSetStatusMessage("HELP: Ctrl-Q = quit");
 
     while (1) {
         editorRefreshScreen();
