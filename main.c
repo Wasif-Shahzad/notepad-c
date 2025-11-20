@@ -401,18 +401,19 @@ void editorProcessKeypress(void) {
             editorMoveCursor(c);
             break;
         case PAGE_UP: {
-            int current_position = E.cy;
-            while (current_position > 0) {
+            E.cy = E.rowOff;
+            int times = E.screenRows;
+            while (times--) {
                 editorMoveCursor(UP_KEY);
-                current_position--;
             }
             break;
         }
         case PAGE_DOWN: {
-            int current_position = E.cy;
-            while (current_position < E.screenRows - 1) {
+            E.cy = E.rowOff + E.screenRows - 1;
+            if (E.cy > E.numRows) E.cy = E.numRows;
+            int times = E.screenRows;
+            while (times--) {
                 editorMoveCursor(DOWN_KEY);
-                current_position++;
             }
             break;
         }
@@ -421,8 +422,10 @@ void editorProcessKeypress(void) {
             break;
         }
         case END_KEY: {
-            const int lineLen = E.row[E.cy].size;
-            E.cx = lineLen;
+            if (E.cy < E.numRows) {
+                const int lineLen = E.row[E.cy].size;
+                E.cx = lineLen;
+            }
             break;
         }
         default:
