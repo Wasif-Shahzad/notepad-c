@@ -39,7 +39,6 @@ typedef struct {
     char* render;
     int size;
     int rsize;
-    int* cxTorx;
 } eRow;
 
 struct editorConfig {
@@ -185,12 +184,16 @@ int getWindowSize(int *rows, int *cols) {
 /* Row operations */
 
 int editorRowCxToRx(const eRow* row, const int cx) {
-    return row->cxTorx[cx];
+    int idx = 0;
+    for (int i = 0; i < cx; i++) {
+        if (row->text[i] == '\t') idx += TAB_SIZE;
+        else idx++;
+    }
+    return idx;
 }
 
 void editorUpdateRow(eRow* row) {
     free(row->render);
-    free(row->cxTorx);
 
     int len = 0;
     for (int idx = 0; idx < row->size; idx++) {
@@ -203,10 +206,8 @@ void editorUpdateRow(eRow* row) {
 
     row->rsize = len;
     row->render = malloc(len + 1);
-    row->cxTorx = calloc(len + 1, sizeof(int));
     int idx = 0;
     for (int i = 0; i < row->size; i++) {
-        row->cxTorx[i] = idx;
         if (row->text[i] == '\t') {
             for (int j = 0; j < TAB_SIZE; j++) {
                 row->render[idx++] = ' ';
@@ -216,7 +217,6 @@ void editorUpdateRow(eRow* row) {
         }
     }
     row->render[len] = '\0';
-    row->cxTorx[row->size] = len;
 }
 
 void editorAppendRow(const char* s, const int len) {
@@ -235,7 +235,6 @@ void editorAppendRow(const char* s, const int len) {
 
     E.row[at].rsize = len;
     E.row[at].render = NULL;
-    E.row[at].cxTorx = NULL;
     editorUpdateRow(&E.row[at]);
 
     E.numRows++;
@@ -423,12 +422,14 @@ void editorMoveCursor(const int c) {
         const int lineLen = E.row[E.cy].size;
         if (lineLen < E.cx) E.cx = lineLen;
     } else if (c == RIGHT_KEY) {
-        const int lineLen = E.row[E.cy].size;
-        if (E.cx < lineLen) {
-            E.cx++;
-        } else if (E.cy < E.numRows) {
-            E.cy++;
-            E.cx = 0;
+        if (E.row != NULL) {
+            const int lineLen = E.row[E.cy].size;
+            if (E.cx < lineLen) {
+                E.cx++;
+            } else if (E.cy < E.numRows) {
+                E.cy++;
+                E.cx = 0;
+            }
         }
     }
 }
