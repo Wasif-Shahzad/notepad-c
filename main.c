@@ -248,6 +248,18 @@ void editorAppendRow(const char* s, const int len) {
     E.modified++;
 }
 
+void editorFreeRow(const eRow* row) {
+    free(row->render);
+    free(row->text);
+}
+
+void editorDeleteRow(int at) {
+    if (at < 0 || at >= E.numRows) return;
+    memmove(&E.row[at], &E.row[at + 1], sizeof(eRow) * (E.numRows - at - 1));
+    E.numRows--;
+    E.modified++;
+}
+
 void editorRowInsertChar(eRow* row, int at, char c) {
     if (at < 0 || at > row->size) at = row->size;
     char* tmp = realloc(row->text, row->size + 2);
@@ -263,6 +275,28 @@ void editorRowInsertChar(eRow* row, int at, char c) {
     E.modified++;
 }
 
+void editorRowAppendString(eRow* row, char* s, int len) {
+    char* tmp = realloc(row->text, row->size + len + 1);
+    if (tmp == NULL) {
+        free(tmp);
+        return;
+    }
+    row->text = tmp;
+    memcpy(&row->text[row->size], s, len);
+    row->size += len;
+    row->text[row->size] = '\0';
+    editorUpdateRow(row);
+    E.modified++;
+}
+
+void editorRowDelChar(eRow* row, const int at) {
+    if (at < 0 || at >= row->size) return;
+    memmove(&row->text[at], &row->text[at + 1], row->size - at);
+    row->size--;
+    editorUpdateRow(row);
+    E.modified++;
+}
+
 /* Editor Operations */
 
 void editorInsertChar(const char c) {
@@ -271,6 +305,21 @@ void editorInsertChar(const char c) {
     }
     editorRowInsertChar(&E.row[E.cy], E.cx, c);
     E.cx++;
+}
+
+void editorDelChar(void) {
+    if (E.cy == E.numRows) return;
+    if (E.cx == 0 && E.cy == 0) return;
+    eRow* row = &E.row[E.cy];
+    if (E.cx > 0) {
+        editorRowDelChar(row, E.cx - 1);
+        E.cx--;
+    } else {
+        E.cx = E.row[E.cy - 1].size;
+        editorRowAppendString(&E.row[E.cy - 1], row->text, row->size);
+        editorDeleteRow(E.cy);
+        E.cy--;
+    }
 }
 
 /* File I/o */
@@ -520,7 +569,8 @@ void editorProcessKeypress(void) {
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
-            // TODO
+            if (c == DEL_KEY) editorMoveCursor(RIGHT_KEY);
+            editorDelChar();
             break;
         case CTRL_KEY('l'):
         case '\x1b':
@@ -531,7 +581,7 @@ void editorProcessKeypress(void) {
             break;
         case CTRL_KEY('q'):
             if (E.modified && remaining_quits > 0) {
-                editorSetStatusMessage("WARNING! File has unsaved changes!",
+                editorSetStatusMessage("WARNING! File has unsaved changes! "
                     "Press Ctrl-Q %d more times to force quit.", remaining_quits);
                 remaining_quits--;
                 return;
