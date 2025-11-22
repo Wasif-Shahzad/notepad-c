@@ -18,6 +18,8 @@
 
 /* Function Prototypes */
 void editorSetStatusMessage(const char* fmt, ...);
+void editorRefreshScreen(void);
+char* editorPrompt(char* prompt);
 
 /* Defines */
 #define VERSION "0.0.1"
@@ -254,14 +256,14 @@ void editorFreeRow(const eRow* row) {
     free(row->text);
 }
 
-void editorDeleteRow(int at) {
+void editorDeleteRow(const int at) {
     if (at < 0 || at >= E.numRows) return;
     memmove(&E.row[at], &E.row[at + 1], sizeof(eRow) * (E.numRows - at - 1));
     E.numRows--;
     E.modified++;
 }
 
-void editorRowInsertChar(eRow* row, int at, char c) {
+void editorRowInsertChar(eRow* row, int at, const char c) {
     if (at < 0 || at > row->size) at = row->size;
     char* tmp = realloc(row->text, row->size + 2);
     if (tmp == NULL) {
@@ -276,7 +278,7 @@ void editorRowInsertChar(eRow* row, int at, char c) {
     E.modified++;
 }
 
-void editorRowAppendString(eRow* row, char* s, int len) {
+void editorRowAppendString(eRow* row, const char* s, const int len) {
     char* tmp = realloc(row->text, row->size + len + 1);
     if (tmp == NULL) {
         free(tmp);
@@ -380,7 +382,13 @@ void editorOpen(const char* fileName) {
 }
 
 void editorSave(void) {
-    if (E.fileName == NULL) return;
+    if (E.fileName == NULL) {
+        E.fileName = editorPrompt("Save as: %s");
+        if (E.fileName == NULL) {
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    }
 
     int len;
     char* buff = editorRowsToString(&len);
@@ -544,6 +552,47 @@ void editorSetStatusMessage(const char* fmt, ...) {
 
 /* Input */
 
+char* editorPrompt(char* prompt) {
+    size_t bufSize = 128;
+    char* buf = malloc(bufSize);
+
+    size_t bufLen = 0;
+    buf[0] = '\0';
+
+    while (1) {
+        editorSetStatusMessage(prompt, buf);
+        editorRefreshScreen();
+
+        int c = editorReadKey();
+        if (c == '\x1b') {
+            editorSetStatusMessage("");
+            free(buf);
+            return NULL;
+        }
+        if (c == BACKSPACE || c == DEL_KEY || c == CTRL_KEY('h')) {
+            if (bufLen != 0) {
+                buf[--bufLen] = '\0';
+            }
+        } else if (c == '\r') {
+            if (bufLen != 0) {
+                editorSetStatusMessage("");
+                return buf;
+            }
+        } else if (!iscntrl(c) && c < 128) {
+            if (bufLen == bufSize - 1) {
+                char* tmp = realloc(buf, 2 * bufSize);
+                if (tmp == NULL) {
+                    die("realloc in editor prompt");
+                }
+                buf = tmp;
+                bufSize = 2 * bufSize;
+            }
+            buf[bufLen++] = c;
+            buf[bufLen] = '\0';
+        }
+    }
+}
+
 void editorMoveCursor(const int c) {
     if (c == UP_KEY && E.cy > 0) {
         E.cy--;
@@ -565,7 +614,7 @@ void editorMoveCursor(const int c) {
             const int lineLen = E.row[E.cy].size;
             if (E.cx < lineLen) {
                 E.cx++;
-            } else if (E.cy < E.numRows) {
+            } else if (E.cy + 1 < E.numRows) {
                 E.cy++;
                 E.cx = 0;
             }
