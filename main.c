@@ -19,7 +19,7 @@
 /* Function Prototypes */
 void editorSetStatusMessage(const char* fmt, ...);
 void editorRefreshScreen(void);
-char* editorPrompt(char* prompt);
+char* editorPrompt(const char* prompt);
 
 /* Defines */
 #define VERSION "0.0.1"
@@ -322,6 +322,7 @@ void editorInsertNewLine(void) {
         editorUpdateRow(row);
     }
     E.cy++;
+    E.cx = 0;
 }
 
 void editorDelChar(void) {
@@ -419,7 +420,7 @@ struct append_buffer {
 
 #define ABUFF_INIT {NULL, 0}
 
-void abAppend(struct append_buffer* ab, char* s, int len) {
+void abAppend(struct append_buffer* ab, const char* s, const int len) {
     char* new = realloc(ab->p, ab->len + len);
     if (new == NULL) {
         return;
@@ -552,7 +553,7 @@ void editorSetStatusMessage(const char* fmt, ...) {
 
 /* Input */
 
-char* editorPrompt(char* prompt) {
+char* editorPrompt(const char* prompt) {
     size_t bufSize = 128;
     char* buf = malloc(bufSize);
 
